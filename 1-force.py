@@ -138,41 +138,9 @@ def get_next_point(current_point, step_size):
     next_y = current_point.y + sy * step_size
     return Point(next_x, next_y)
 
-
-# 主程序
-def main():
-    file_path = "data.txt"  # 假设 txt 文件名为 points_data.txt
-    points_collection = load_points_from_file(file_path)
-
-    # 提取坐标
-    coords = np.array([(point.x, point.y) for point in points_collection.get_points()])
-
-    # 使用 Delaunay 三角剖分生成三角形
-    delaunay = Delaunay(coords)
-
-
-
-
-
-    # 设置指定的起始点 (手动指定起始点坐标)
-    start_x, start_y = 3.0, 4.0  # 你可以在这里手动指定起始点的坐标
-    start_point = Point(start_x, start_y, 0, 0)  # 假设应力方向为 (0, 0)
-
-
-    for simplex in delaunay.simplices:
-        triangle_points = coords[simplex]
-        if is_point_in_triangle(start_point, triangle_points):
-            get_stress_at_triangle(start_point, triangle_points, points_collection)
-            break    # # 绘制起始点
-
-    # 进行力流路径的迭代
-    step_size = 0.1  # 每次步进的距离
-    max_steps = 100  # 迭代步数
-    current_point = start_point
+def trace_force_path(start_point, points_collection, delaunay, coords, step_size, max_steps, ):
+    current_point=start_point
     path = [current_point]
-
-
-
     for step in range(max_steps):
         # 1. 计算下一个点（沿当前应力方向移动）
         next_x = current_point.x + current_point.stress_x * step_size
@@ -203,8 +171,88 @@ def main():
         path_x = [p.x for p in path]
         path_y = [p.y for p in path]
 
+
+    current_point = start_point
+    for step in range(max_steps):
+        # 1. 计算下一个点（沿当前应力方向移动）
+        next_x = current_point.x - current_point.stress_x * step_size
+        next_y = current_point.y - current_point.stress_y * step_size
+        next_point = Point(next_x, next_y)  # 新点初始应力为0
+
+        # 2. 判断新点是否在任何三角形内
+        point_in_mesh = False
+        for simplex in delaunay.simplices:
+            triangle = coords[simplex]  # 获取三角形顶点坐标
+
+            if is_point_in_triangle(next_point, triangle):
+                # 3. 如果在三角形内 -> 计算插值应力
+                if get_stress_at_triangle(next_point, triangle, points_collection):
+                    point_in_mesh = True
+                    break  # 找到所属三角形后立即跳出循环
+
+        # 4. 根据判断结果决定是否继续
+        if not point_in_mesh:
+            print(f"路径在 ({next_point.x:.2f}, {next_point.y:.2f}) 离开网格，终止计算")
+            break
+
+        # 5. 将有效点加入路径并更新当前点
+        path.insert(0, next_point)
+        current_point = next_point
+
+        # 更新路径数据
+        path_x = [p.x for p in path]
+        path_y = [p.y for p in path]
+
+    return path
+# 主程序
+def main():
+    file_path = ("4-28foce_processed.txt")  # 假设 txt 文件名为 points_data.txt
+    points_collection = load_points_from_file(file_path)
+
+    # 提取坐标
+    coords = np.array([(point.x, point.y) for point in points_collection.get_points()])
+
+    # 使用 Delaunay 三角剖分生成三角形
+    delaunay = Delaunay(coords)
+
+    # 设置指定的起始点 (手动指定起始点坐标)
+    start_points = [
+        Point(0, 20.0),  # 起始点1
+        Point(0, 18),  # 起始点2
+        Point(0, 16), # 起始点3
+        Point(0, 22) , # 起始点3
+
+        Point(0, -22),  # 起始点3
+        Point(0, -16),  # 起始点3
+        Point(0, -18),  # 起始点3
+        Point(0, -20),  # 起始点3
+
+    ]
+    # start_point = Point(4, 5, 0, 0)  # 假设应力方向为 (0, 0)
+
+    # 进行力流路径的迭代
     plt.figure(figsize=(10, 8))
     ax = plt.gca()
+
+    step_size = 1  # 每次步进的距离
+    max_steps = 10000
+
+    for i, start_point in enumerate(start_points):
+
+        for simplex in delaunay.simplices:
+            triangle_points = coords[simplex]
+            if is_point_in_triangle(start_point, triangle_points):
+                get_stress_at_triangle(start_point, triangle_points, points_collection)
+                break    # # 绘制起始点
+
+        path=trace_force_path(start_point, points_collection, delaunay, coords, step_size, max_steps)
+
+
+        if len(path) > 1:
+            # 路径线（红色）
+            ax.plot([p.x for p in path], [p.y for p in path], 'r-', lw=2, label='应力流径')
+
+
 
     # 1. 绘制三角网格背景
     for simplex in delaunay.simplices:
@@ -215,39 +263,37 @@ def main():
     ax.scatter(coords[:, 0], coords[:, 1], color='blue', s=10, alpha=0.5)
 
     # 3. 绘制完整路径
-    if len(path) > 1:
-        # 路径线（红色）
-        ax.plot([p.x for p in path], [p.y for p in path], 'r-', lw=2, label='应力流径')
+
 
         # 路径点颜色映射应力大小
-        stresses = [np.sqrt(p.stress_x ** 2 + p.stress_y ** 2) for p in path]
-        sc = ax.scatter(
-            [p.x for p in path], [p.y for p in path],
-            c=stresses, cmap='coolwarm', s=50,
-            edgecolors='k', linewidths=0.5,
-            label='应力值'
-        )
-        plt.colorbar(sc, label='应力大小 (MPa)')
+        # stresses = [np.sqrt(p.stress_x ** 2 + p.stress_y ** 2) for p in path]
+        # sc = ax.scatter(
+        #     [p.x for p in path], [p.y for p in path],
+        #     c=stresses, cmap='coolwarm', s=50,
+        #     edgecolors='k', linewidths=0.5,
+        #     label='应力值'
+        # )
+        # plt.colorbar(sc, label='应力大小 (MPa)')
 
-        # 标记关键点
-        ax.scatter(path[0].x, path[0].y, color='lime', s=150, marker='*', label='起始点')
-        ax.scatter(path[-1].x, path[-1].y, color='red', s=150, marker='X', label='终止点')
+        # # 标记关键点
+        # ax.scatter(path[0].x, path[0].y, color='lime', s=150, marker='*', label='起始点')
+        # ax.scatter(path[-1].x, path[-1].y, color='red', s=150, marker='X', label='终止点')
 
         # 添加方向箭头（稀疏显示）
-        for i in range(0, len(path), len(path) // 10 + 1):  # 约10个箭头
-            p = path[i]
-            ax.quiver(
-                p.x, p.y, p.stress_x, p.stress_y,
-                color='black', scale=30, width=0.004,
-                headwidth=4, alpha=0.7
-            )
-        # 4. 图形标注
-    ax.set_xlabel('X坐标 (mm)', fontsize=12)
-    ax.set_ylabel('Y坐标 (mm)', fontsize=12)
-    ax.set_title('应力流径分析结果', fontsize=14)
-    ax.legend(loc='upper right')
-    ax.grid(True, linestyle='--', alpha=0.3)
-    plt.tight_layout()
+        # for i in range(0, len(path), len(path) // 10 + 1):  # 约10个箭头
+        #     p = path[i]
+        #     ax.quiver(
+        #         p.x, p.y, p.stress_x, p.stress_y,
+        #         color='black', scale=30, width=0.004,
+        #         headwidth=4, alpha=0.7
+        #     )
+    #     # 4. 图形标注
+    # ax.set_xlabel('X坐标 (mm)', fontsize=12)
+    # ax.set_ylabel('Y坐标 (mm)', fontsize=12)
+    # ax.set_title('应力流径分析结果', fontsize=14)
+    # ax.legend(loc='upper right')
+    # ax.grid(True, linestyle='--', alpha=0.3)
+    # plt.tight_layout()
     plt.show()
 
 
