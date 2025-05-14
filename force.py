@@ -1,7 +1,110 @@
 import matplotlib.pyplot as plt
 from scipy.spatial import Delaunay
 import numpy as np
+import re
 
+def point_to_segment_distance(px, py, x1, y1, x2, y2):
+    """
+    Calculate the minimum distance from point (px, py) to the line segment defined by (x1, y1) and (x2, y2).
+    """
+    # Vector from point 1 to point 2
+    dx = x2 - x1
+    dy = y2 - y1
+
+    if dx == 0 and dy == 0:
+        # The segment is a single point
+        return np.hypot(px - x1, py - y1)
+
+    # Parameter t of the projection of point p onto the line defined by the segment
+    t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)
+
+    if t < 0:
+        # Closest to point 1
+        closest_x, closest_y = x1, y1
+    elif t > 1:
+        # Closest to point 2
+        closest_x, closest_y = x2, y2
+    else:
+        # Projection falls on the segment
+        closest_x = x1 + t * dx
+        closest_y = y1 + t * dy
+
+    return np.hypot(px - closest_x, py - closest_y)
+
+def point_to_polyline_distance(px, py, polyline_points):
+    """
+    Calculate the minimum distance from point (px, py) to a polyline defined by a list of points [(x0, y0), (x1, y1), ...].
+    """
+    min_dist = float('inf')
+    for i in range(len(polyline_points) - 1):
+        x1, y1 = polyline_points[i]
+        x2, y2 = polyline_points[i + 1]
+        dist = point_to_segment_distance(px, py, x1, y1, x2, y2)
+        if dist < min_dist:
+            min_dist = dist
+    return min_dist
+
+def segments_intersect(p1, p2, q1, q2):
+    """
+    Check if line segment p1-p2 intersects with line segment q1-q2.
+    p1, p2, q1, q2 are tuples (x, y).
+    """
+    def orientation(a, b, c):
+        # Returns the orientation of the triplet (a, b, c)
+        # 0 -> colinear, 1 -> clockwise, 2 -> counterclockwise
+        val = (b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1])
+        if abs(val) < 1e-10:
+            return 0
+        return 1 if val > 0 else 2
+
+    def on_segment(a, b, c):
+        # Check if point b lies on segment a-c
+        if min(a[0], c[0]) - 1e-10 <= b[0] <= max(a[0], c[0]) + 1e-10 and \
+           min(a[1], c[1]) - 1e-10 <= b[1] <= max(a[1], c[1]) + 1e-10:
+            return True
+        return False
+
+    o1 = orientation(p1, p2, q1)
+    o2 = orientation(p1, p2, q2)
+    o3 = orientation(q1, q2, p1)
+    o4 = orientation(q1, q2, p2)
+
+    # General case
+    if o1 != o2 and o3 != o4:
+        return True
+
+    # Special Cases
+    # p1, p2 and q1 are colinear and q1 lies on segment p1p2
+    if o1 == 0 and on_segment(p1, q1, p2):
+        return True
+
+    # p1, p2 and q2 are colinear and q2 lies on segment p1p2
+    if o2 == 0 and on_segment(p1, q2, p2):
+        return True
+
+    # q1, q2 and p1 are colinear and p1 lies on segment q1q2
+    if o3 == 0 and on_segment(q1, p1, q2):
+        return True
+
+    # q1, q2 and p2 are colinear and p2 lies on segment q1q2
+    if o4 == 0 and on_segment(q1, p2, q2):
+        return True
+
+    return False
+
+def segment_intersects_polyline(seg_start, seg_end, polyline_points):
+    """
+    Check if the line segment defined by seg_start and seg_end intersects with the polyline.
+    seg_start, seg_end: tuples (x, y)
+    polyline_points: list of tuples [(x0, y0), (x1, y1), ...]
+    Returns True if any segment of the polyline intersects with the given segment.
+    """
+    for i in range(len(polyline_points) - 1):
+        poly_start = polyline_points[i]
+        poly_end = polyline_points[i + 1]
+        if segments_intersect(seg_start, seg_end, poly_start, poly_end):
+            return True
+    return False
 
 class Point:
     def __init__(self, x, y, stress_x=0.0, stress_y=0.0):
@@ -62,6 +165,34 @@ def load_points_from_file(file_path):
     except Exception as e:
         print(f"发生未知错误: {e}")
     return points
+
+
+def extract_multiple_polylines(file_path, skip_header=0):
+    polylines = {}  # 存储 {编号: [(x1, y1), (x2, y2), ...]}
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line_number, line in enumerate(f, start=1):
+                if line_number <= skip_header:
+                    continue  # Skip header lines
+                # Split by comma (normal or full-width) or whitespace
+                values = re.split(r'[,\s，]+', line.strip())
+                if len(values) >= 3:  # 至少 x, y, 编号
+                    try:
+                        x = float(values[0])
+                        y = float(values[1])
+                        polyline_id = int(values[2])  # 假设编号是整数
+                        if polyline_id not in polylines:
+                            polylines[polyline_id] = []
+                        polylines[polyline_id].append((x, y))
+                    except ValueError:
+                        print(f"Warning: Line {line_number} has invalid data and will be skipped.")
+                else:
+                    print(f"Warning: Line {line_number} does not have enough data and will be skipped.")
+    except FileNotFoundError:
+        print(f"Error: File {file_path} not found.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    return polylines
 
 # 从给定的三角形网格中判断点是否在其中
 def is_point_in_triangle(point, triangle_points, tol=1e-6):
@@ -132,21 +263,44 @@ def get_stress_at_triangle(point, triangle_points, points_collection):
 
 
 # 计算下一点的坐标
-def get_next_point(current_point, step_size):
+def get_next_point(current_point, step_size, direction=1):
     sx, sy = current_point.get_stress_vector()
-    next_x = current_point.x + sx * step_size
-    next_y = current_point.y + sy * step_size
+    magnitude = np.hypot(sx, sy)
+
+    unit_sx = sx / magnitude
+    unit_sy = sy / magnitude
+
+
+    # 将方向向量转换为复数并乘以 direction
+    vec = complex(unit_sx, unit_sy) * direction
+
+    next_x = current_point.x + vec.real * step_size
+    next_y = current_point.y + vec.imag * step_size
     return Point(next_x, next_y)
 
-def trace_force_path(start_point, points_collection, delaunay, coords, step_size, max_steps, ):
+def trace_force_path(start_point, points_collection, delaunay, coords, step_size, max_steps,edge):
+    for simplex in delaunay.simplices:
+        triangle_points = coords[simplex]
+        if is_point_in_triangle(start_point, triangle_points):
+            get_stress_at_triangle(start_point, triangle_points, points_collection)
+            break  # # 绘制起始点
     current_point=start_point
     path = [current_point]
     for step in range(max_steps):
         # 1. 计算下一个点（沿当前应力方向移动）
-        next_x = current_point.x + current_point.stress_x * step_size
-        next_y = current_point.y + current_point.stress_y * step_size
-        next_point = Point(next_x, next_y)  # 新点初始应力为0
+        next_point = get_next_point(current_point, step_size,1)
+        print(f"Forward step {step+1}: Point({next_point.x:.2f}, {next_point.y:.2f})")
 
+        if any(
+                segment_intersects_polyline(
+                    (current_point.x, current_point.y),
+                    (next_point.x, next_point.y),
+                    polyline
+                )
+                for polyline in edge.values()  # 遍历所有多段线
+        ):
+            print(f"路径在 ({next_point.x:.2f}, {next_point.y:.2f}) 与边界相交，终止计算")
+            break
         # 2. 判断新点是否在任何三角形内
         point_in_mesh = False
         for simplex in delaunay.simplices:
@@ -175,10 +329,20 @@ def trace_force_path(start_point, points_collection, delaunay, coords, step_size
     current_point = start_point
     for step in range(max_steps):
         # 1. 计算下一个点（沿当前应力方向移动）
-        next_x = current_point.x - current_point.stress_x * step_size
-        next_y = current_point.y - current_point.stress_y * step_size
-        next_point = Point(next_x, next_y)  # 新点初始应力为0
+        next_point = get_next_point(current_point, step_size,-1)
 
+        print(f"Forward step {step+1}: Point({next_point.x:.2f}, {next_point.y:.2f})")
+
+        if any(
+                segment_intersects_polyline(
+                    (current_point.x, current_point.y),
+                    (next_point.x, next_point.y),
+                    polyline
+                )
+                for polyline in edge.values()  # 遍历所有多段线
+        ):
+            print(f"路径在 ({next_point.x:.2f}, {next_point.y:.2f}) 与边界相交，终止计算")
+            break
         # 2. 判断新点是否在任何三角形内
         point_in_mesh = False
         for simplex in delaunay.simplices:
@@ -208,6 +372,8 @@ def trace_force_path(start_point, points_collection, delaunay, coords, step_size
 def main():
     file_path = ("4-28foce_processed.txt")  # 假设 txt 文件名为 points_data.txt
     points_collection = load_points_from_file(file_path)
+    file_path = ("slice1.txt")
+    edge = extract_multiple_polylines(file_path)
 
     # 提取坐标
     coords = np.array([(point.x, point.y) for point in points_collection.get_points()])
@@ -217,15 +383,35 @@ def main():
 
     # 设置指定的起始点 (手动指定起始点坐标)
     start_points = [
-        Point(0, 20.0),  # 起始点1
-        Point(0, 18),  # 起始点2
-        Point(0, 16), # 起始点3
-        Point(0, 22) , # 起始点3
-
-        Point(0, -22),  # 起始点3
-        Point(0, -16),  # 起始点3
-        Point(0, -18),  # 起始点3
-        Point(0, -20),  # 起始点3
+        # Point(x=40, y=22), Point(x=40, y=21), Point(x=40, y=20),
+        # Point(x=40, y=19), Point(x=40, y=18), Point(x=40, y=17),
+        # Point(x=40, y=16), Point(x=40, y=15), Point(x=40, y=14),
+        # Point(x=40, y=13), Point(x=40, y=12), Point(x=40, y=11),
+        # Point(x=40, y=10), Point(x=40, y=9), Point(x=40, y=8),
+        # Point(x=40, y=7), Point(x=40, y=6), Point(x=40, y=5),
+        # Point(x=40, y=4), Point(x=40, y=3), Point(x=40, y=2),
+        # Point(x=40, y=1), Point(x=40, y=0), Point(x=40, y=-1),
+        # Point(x=40, y=-2), Point(x=40, y=-3), Point(x=40, y=-4),
+        # Point(x=40, y=-5), Point(x=40, y=-6), Point(x=40, y=-7),
+        # Point(x=40, y=-8), Point(x=40, y=-9), Point(x=40, y=-10),
+        # Point(x=40, y=-11), Point(x=40, y=-12), Point(x=40, y=-13),
+        # Point(x=40, y=-14), Point(x=40, y=-15), Point(x=40, y=-16),
+        # Point(x=40, y=-17), Point(x=40, y=-18), Point(x=40, y=-19),
+        # Point(x=40, y=-20), Point(x=40, y=-21), Point(x=40, y=-22)
+        Point(40, 0),  # 起始点2
+        # Point(0, 19),  # 起始点2
+        # Point(0, 16), # 起始点3
+        # Point(0, 17),  # 起始点2
+        # Point(0, 20),  # 起始点3
+        # Point(0, 21),  # 起始点2
+        # Point(0, 22) , # 起始点3
+        # Point(0, -22),  # 起始点3
+        # Point(0, -21),  # 起始点3
+        # Point(0, -16),  # 起始点3
+        # Point(0, -18),  # 起始点3
+        # Point(0, -17),  # 起始点3
+        # Point(0, -20),  # 起始点3
+        # Point(0, -19),  # 起始点3
 
     ]
     # start_point = Point(4, 5, 0, 0)  # 假设应力方向为 (0, 0)
@@ -234,18 +420,14 @@ def main():
     plt.figure(figsize=(10, 8))
     ax = plt.gca()
 
-    step_size = 1  # 每次步进的距离
-    max_steps = 10000
+    step_size = 0.1  # 每次步进的距离
+    max_steps = 500
 
     for i, start_point in enumerate(start_points):
 
-        for simplex in delaunay.simplices:
-            triangle_points = coords[simplex]
-            if is_point_in_triangle(start_point, triangle_points):
-                get_stress_at_triangle(start_point, triangle_points, points_collection)
-                break    # # 绘制起始点
 
-        path=trace_force_path(start_point, points_collection, delaunay, coords, step_size, max_steps)
+
+        path=trace_force_path(start_point, points_collection, delaunay, coords, step_size, max_steps,edge)
 
 
         if len(path) > 1:
@@ -262,6 +444,16 @@ def main():
     # 2. 绘制原始数据点
     ax.scatter(coords[:, 0], coords[:, 1], color='blue', s=10, alpha=0.5)
 
+    for polyline_id, points in edge.items():
+        x_coords, y_coords = zip(*points)  # 解压坐标点
+        ax.plot(
+            x_coords,
+            y_coords,
+            marker='o',  # 点标记样式
+            linestyle='-',  # 线型
+            color='blue',  # 颜色（可以改成不同颜色区分不同多段线）
+            label=f'Path {polyline_id}'  # 添加图例标签
+        )
 
     plt.show()
 
