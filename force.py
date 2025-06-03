@@ -1,7 +1,12 @@
+import math
+
 import matplotlib.pyplot as plt
 from scipy.spatial import Delaunay
 import numpy as np
 import re
+
+from torch.ao.quantization.fx.utils import node_arg_is_weight
+
 
 def point_to_segment_distance(px, py, x1, y1, x2, y2):
     """
@@ -289,6 +294,8 @@ def trace_force_path(start_point, points_collection, delaunay, coords, step_size
     for step in range(max_steps):
         # 1. 计算下一个点（沿当前应力方向移动）
         next_point = get_next_point(current_point, step_size,1)
+
+
         print(f"Forward step {step+1}: Point({next_point.x:.2f}, {next_point.y:.2f})")
 
         if any(
@@ -380,40 +387,78 @@ def main():
 
     # 使用 Delaunay 三角剖分生成三角形
     delaunay = Delaunay(coords)
+    total_stress = 0
+    prev_stress = None
 
+    x1, y1 = (0,25)
+    x2, y2 = (0,20)
+    dx = x2 - x1
+    dy = y2 - y1
+    length = math.hypot(dx, dy)
+    num_steps = int(length /0.01)
+
+    result = []
+    prev_stress = None
+    space = 1000
+    for i in range(num_steps + 1):
+        t = i / num_steps
+        x = x1 + t * dx
+        y = y1 + t * dy
+        now_point=Point(x,y)
+        for simplex in delaunay.simplices:
+            triangle_points = coords[simplex]
+            if is_point_in_triangle(now_point, triangle_points):
+                get_stress_at_triangle(now_point, triangle_points, points_collection)
+                break  # # 绘制起始点
+        # 计算当前点的应力模
+        stress_x, stress_y=now_point.get_stress_vector()
+        stress_mag = math.hypot(stress_x, stress_y)
+
+
+        total_stress += stress_mag
+
+        # 判断间隔是否达到设定的应力间距 space
+
+        if prev_stress is None or total_stress - prev_stress >= space:
+            rounded_point = Point(x=x, y=y)
+            result.append(rounded_point)
+            print(f"Added {rounded_point}, total_stress = {total_stress:.2f}")
+            prev_stress = total_stress
+
+    start_points=result
     # 设置指定的起始点 (手动指定起始点坐标)
-    start_points = [
-        # Point(x=40, y=22), Point(x=40, y=21), Point(x=40, y=20),
-        # Point(x=40, y=19), Point(x=40, y=18), Point(x=40, y=17),
-        # Point(x=40, y=16), Point(x=40, y=15), Point(x=40, y=14),
-        # Point(x=40, y=13), Point(x=40, y=12), Point(x=40, y=11),
-        # Point(x=40, y=10), Point(x=40, y=9), Point(x=40, y=8),
-        # Point(x=40, y=7), Point(x=40, y=6), Point(x=40, y=5),
-        # Point(x=40, y=4), Point(x=40, y=3), Point(x=40, y=2),
-        # Point(x=40, y=1), Point(x=40, y=0), Point(x=40, y=-1),
-        # Point(x=40, y=-2), Point(x=40, y=-3), Point(x=40, y=-4),
-        # Point(x=40, y=-5), Point(x=40, y=-6), Point(x=40, y=-7),
-        # Point(x=40, y=-8), Point(x=40, y=-9), Point(x=40, y=-10),
-        # Point(x=40, y=-11), Point(x=40, y=-12), Point(x=40, y=-13),
-        # Point(x=40, y=-14), Point(x=40, y=-15), Point(x=40, y=-16),
-        # Point(x=40, y=-17), Point(x=40, y=-18), Point(x=40, y=-19),
-        # Point(x=40, y=-20), Point(x=40, y=-21), Point(x=40, y=-22)
-        Point(40, 0),  # 起始点2
-        # Point(0, 19),  # 起始点2
-        # Point(0, 16), # 起始点3
-        # Point(0, 17),  # 起始点2
-        # Point(0, 20),  # 起始点3
-        # Point(0, 21),  # 起始点2
-        # Point(0, 22) , # 起始点3
-        # Point(0, -22),  # 起始点3
-        # Point(0, -21),  # 起始点3
-        # Point(0, -16),  # 起始点3
-        # Point(0, -18),  # 起始点3
-        # Point(0, -17),  # 起始点3
-        # Point(0, -20),  # 起始点3
-        # Point(0, -19),  # 起始点3
-
-    ]
+    # start_points = [
+    #     # Point(x=40, y=22), Point(x=40, y=21), Point(x=40, y=20),
+    #     # Point(x=40, y=19), Point(x=40, y=18), Point(x=40, y=17),
+    #     # Point(x=40, y=16), Point(x=40, y=15), Point(x=40, y=14),
+    #     # Point(x=40, y=13), Point(x=40, y=12), Point(x=40, y=11),
+    #     # Point(x=40, y=10), Point(x=40, y=9), Point(x=40, y=8),
+    #     # Point(x=40, y=7), Point(x=40, y=6), Point(x=40, y=5),
+    #     # Point(x=40, y=4), Point(x=40, y=3), Point(x=40, y=2),
+    #     # Point(x=40, y=1), Point(x=40, y=0), Point(x=40, y=-1),
+    #     # Point(x=40, y=-2), Point(x=40, y=-3), Point(x=40, y=-4),
+    #     # Point(x=40, y=-5), Point(x=40, y=-6), Point(x=40, y=-7),
+    #     # Point(x=40, y=-8), Point(x=40, y=-9), Point(x=40, y=-10),
+    #     # Point(x=40, y=-11), Point(x=40, y=-12), Point(x=40, y=-13),
+    #     # Point(x=40, y=-14), Point(x=40, y=-15), Point(x=40, y=-16),
+    #     # Point(x=40, y=-17), Point(x=40, y=-18), Point(x=40, y=-19),
+    #     # Point(x=40, y=-20), Point(x=40, y=-21), Point(x=40, y=-22)
+    #     Point(0, 20),  # 起始点2
+    #     # Point(0, 19),  # 起始点2
+    #     # Point(0, 16), # 起始点3
+    #     # Point(0, 17),  # 起始点2
+    #     # Point(0, 20),  # 起始点3
+    #     # Point(0, 21),  # 起始点2
+    #     # Point(0, 22) , # 起始点3
+    #     # Point(0, -22),  # 起始点3
+    #     # Point(0, -21),  # 起始点3
+    #     # Point(0, -16),  # 起始点3
+    #     # Point(0, -18),  # 起始点3
+    #     # Point(0, -17),  # 起始点3
+    #     # Point(0, -20),  # 起始点3
+    #     # Point(0, -19),  # 起始点3
+    #
+    # ]
     # start_point = Point(4, 5, 0, 0)  # 假设应力方向为 (0, 0)
 
     # 进行力流路径的迭代
@@ -422,17 +467,18 @@ def main():
 
     step_size = 0.1  # 每次步进的距离
     max_steps = 500
-
+    paths=[]
     for i, start_point in enumerate(start_points):
 
 
 
         path=trace_force_path(start_point, points_collection, delaunay, coords, step_size, max_steps,edge)
 
-
+        paths.append(path)
         if len(path) > 1:
             # 路径线（红色）
             ax.plot([p.x for p in path], [p.y for p in path], 'r-', lw=2, label='应力流径')
+
 
 
 
